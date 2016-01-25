@@ -623,6 +623,21 @@ void ThreadImport(std::vector<boost::filesystem::path> vImportFiles)
         }
     }
 
+    // hardcoded $DATADIR/bootstrap-pruned.dat
+    boost::filesystem::path pathBootstrapPruned = GetDataDir() / "bootstrap-pruned.dat";
+    if (boost::filesystem::exists(pathBootstrapPruned)) {
+        FILE *file = fopen(pathBootstrapPruned.string().c_str(), "rb");
+        if (file) {
+            CImportingNow imp;
+            boost::filesystem::path pathBootstrapPrunedOld = GetDataDir() / "bootstrap-pruned.dat.old";
+            LogPrintf("Importing bootstrap-pruned.dat...\n");
+            LoadExternalUtxoFile(chainparams, file);
+            RenameOver(pathBootstrapPruned, pathBootstrapPrunedOld);
+        } else {
+            LogPrintf("Warning: Could not open pruned bootstrap file %s\n", pathBootstrapPruned.string());
+        }
+    }
+
     // -loadblock=
     BOOST_FOREACH(const boost::filesystem::path& path, vImportFiles) {
         FILE *file = fopen(path.string().c_str(), "rb");

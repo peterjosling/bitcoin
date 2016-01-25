@@ -3215,6 +3215,38 @@ bool ProcessNewBlock(CValidationState& state, const CChainParams& chainparams, c
     return true;
 }
 
+bool ProcessNewBlockHeader(CValidationState& state, const CChainParams& chainparams, const CBlockHeader* pblock)
+{
+    // Preliminary checks
+    bool checked = CheckBlockHeader(*pblock, state);
+
+    {
+        LOCK(cs_main);
+        MarkBlockAsReceived(pblock->GetHash());
+        if (!checked) {
+            return error("%s: CheckBlockHeader FAILED", __func__);
+        }
+
+        // Store to disk
+        CBlockIndex *pindex = NULL;
+        bool ret = AcceptBlockHeader(*pblock, state, chainparams, &pindex);
+        CheckBlockIndex(chainparams.GetConsensus());
+        if (!ret)
+            return error("%s: AcceptBlockHeader FAILED", __func__);
+
+        // nTx not serialised in snapshot. Set an incorrect, positive value.
+        pindex->nTx = 1;
+
+        pindex->nChainTx = (pindex->pprev ? pindex->pprev->nChainTx : 0) + pindex->nTx;
+        UpdateTip(pindex);
+        setBlockIndexCandidates.insert(pindex);
+        setDirtyBlockIndex.insert(pindex);
+    }
+
+    return true;
+}
+
+
 bool TestBlockValidity(CValidationState& state, const CChainParams& chainparams, const CBlock& block, CBlockIndex* pindexPrev, bool fCheckPOW, bool fCheckMerkleRoot)
 {
     AssertLockHeld(cs_main);
@@ -3793,6 +3825,64 @@ bool LoadExternalBlockFile(const CChainParams& chainparams, FILE* fileIn, CDiskB
     if (nLoaded > 0)
         LogPrintf("Loaded %i blocks from external file in %dms\n", nLoaded, GetTimeMillis() - nStart);
     return nLoaded > 0;
+}
+
+bool LoadExternalUtxoFile(const CChainParams& chainparams, FILE* fileIn, CDiskBlockPos *dbp)
+{
+	int64_t nStart = GetTimeMillis();
+
+	int nLoaded = 0;
+	long totalSize = 0;
+	try {
+		// This takes over fileIn and calls fclose() on it in the CBufferedFile destructor
+		CBufferedFile blkdat(fileIn, 2*MAX_BLOCK_SIZE, MAX_BLOCK_SIZE+8, SER_DISK, CLIENT_VERSION);
+		while (!blkdat.eof()) {
+			boost::this_thread::interruption_point();
+
+			try {
+				// Read block header
+				CBlockHeader header;
+				blkdat >> header;
+
+				CValidationState state;
+				if (ProcessNewBlockHeader(state, chainparams, &header)) {
+					nLoaded++;
+				}
+
+				if (state.IsError()) {
+					break;
+				}
+
+				pcoinsTip->SetBestBlock(header.GetHash());
+
+				// Read all UTXOs for this block
+				unsigned int utxoCount = 0;
+				::Unserialize(blkdat, VARINT(utxoCount), SER_DISK, CLIENT_VERSION);
+
+				for (unsigned int i = 0; i < utxoCount; i++) {
+					uint256 hash;
+					blkdat >> hash;
+
+					CCoinsModifier coins = pcoinsTip->ModifyNewCoins(hash);
+					blkdat >> *coins;
+
+					totalSize += coins->GetSerializeSize(SER_DISK, CLIENT_VERSION);
+				}
+
+				pcoinsTip->Flush();
+			} catch (const std::exception& e) {
+                LogPrintf("%s: Deserialize or I/O error - %s\n", __func__, e.what());
+            }
+		}
+	} catch (const std::runtime_error& e) {
+        AbortNode(std::string("System error: ") + e.what());
+    }
+
+	if (nLoaded > 0) {
+		LogPrintf("Loaded %i pruned blocks from external file in %dms\n", nLoaded, GetTimeMillis() - nStart);
+	}
+
+	return nLoaded > 0;
 }
 
 void static CheckBlockIndex(const Consensus::Params& consensusParams)
