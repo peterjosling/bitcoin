@@ -3215,7 +3215,7 @@ bool ProcessNewBlock(CValidationState& state, const CChainParams& chainparams, c
     return true;
 }
 
-bool ProcessNewBlockHeader(CValidationState& state, const CChainParams& chainparams, const CBlockHeader* pblock)
+bool ProcessNewBlockHeader(CValidationState& state, const CChainParams& chainparams, const CBlockHeader* pblock, int nTx = 1)
 {
     // Preliminary checks
     bool checked = CheckBlockHeader(*pblock, state);
@@ -3234,9 +3234,7 @@ bool ProcessNewBlockHeader(CValidationState& state, const CChainParams& chainpar
         if (!ret)
             return error("%s: AcceptBlockHeader FAILED", __func__);
 
-        // nTx not serialised in snapshot. Set an incorrect, positive value.
-        pindex->nTx = 1;
-
+        pindex->nTx = nTx;
         pindex->nChainTx = (pindex->pprev ? pindex->pprev->nChainTx : 0) + pindex->nTx;
         UpdateTip(pindex);
         setBlockIndexCandidates.insert(pindex);
@@ -3844,8 +3842,12 @@ bool LoadExternalUtxoFile(const CChainParams& chainparams, FILE* fileIn, CDiskBl
 				CBlockHeader header;
 				blkdat >> header;
 
+				// Read nTx
+				unsigned int nTx = 1;
+				::Unserialize(blkdat, VARINT(nTx), SER_DISK, CLIENT_VERSION);
+
 				CValidationState state;
-				if (ProcessNewBlockHeader(state, chainparams, &header)) {
+				if (ProcessNewBlockHeader(state, chainparams, &header, nTx)) {
 					nLoaded++;
 				}
 
